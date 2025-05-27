@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports: ["6379:6379"]
+    volumes: ["redis-data:/data"]
+
+  data_loader:
+    build: ./data_loader
+    restart: always
+    env_file: .env
+    depends_on: [redis]
+
+  data_retainer:
+    build: ./data_retainer
+    restart: always
+    depends_on: [redis]
+    volumes: ["history:/history"]
+
+  model_service:
+    build: ./model_service
+    restart: always
+    env_file: .env
+    depends_on: [redis]
+    ports: ["8000:8000"]       # optional REST endpoint
+
+  decision_service:
+    build: ./decision_service
+    restart: always
+    env_file: .env
+    depends_on: [redis, model_service]
+
+  trade_executor:
+    build: ./trade_executor
+    restart: always
+    env_file: .env
+    depends_on: [redis]
+
+volumes:
+  redis-data:
+  history:
