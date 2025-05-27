@@ -1,5 +1,7 @@
-fastapi 
-uvicorn 
-torch 
-numpy 
-redis
+fastapi>=0.111
+uvicorn[standard]>=0.29
+torch>=2.2          # swap for tensorflow if your model is TF
+numpy>=1.26
+pandas>=2.2
+redis>=5.0
+pydantic>=2.7
