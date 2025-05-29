@@ -1,8 +1,11 @@
+# data_retainer/Dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY retainer.py .
-CMD ["python", "retainer.py"]
+COPY . .
+
+CMD ["python", "-m", "data_retainer.retainer"]

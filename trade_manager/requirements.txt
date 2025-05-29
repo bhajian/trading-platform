@@ -1,4 +1,4 @@
-pandas>=2.2
-numpy>=1.26
 redis>=5.0
-python-dateutil>=2.9
+fastapi>=0.111
+uvicorn[standard]>=0.29
+python-dotenv>=1.0

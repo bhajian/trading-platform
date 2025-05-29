@@ -3,31 +3,48 @@ version: "3.9"
 services:
   redis:
     image: redis:7-alpine
-    container_name: tp-redis
-    ports:
-      - "6379:6379"
-
-  data-loader:
-    build: ./data_loader
-    container_name: tp-data-loader
-    environment:
-      # <—----------  CHANGE THESE  ----------->
-      FMP_API_KEY: "sWzM15DYnUEke7zhQsnxnGqx1xw4b9Pu"
-      SYMBOL: "EURUSD,GBPUSD,USDJPY,USDCAD,USDAUD"
-      LOADER_INTERVAL: 3600     # seconds; use 30 while testing
-    depends_on:
-      - redis
-
-  data-retainer:
-    build: ./data_retainer
-    container_name: tp-data-retainer
-    depends_on: [redis]
-    environment:
-      REDIS_HOST: redis
-      SYMBOLS: ${SYMBOLS}           # reuse the same list as loader
-      RETAINER_INTERVAL: 3600       # every hour; use 300 for dev
-      ARCHIVE_DIR: /archive
+    command: ["redis-server", "--save", "300", "1", "--appendonly", "yes"]
     volumes:
-      - ./history:/archive          # host-side folder for CSVs
+      - redis_data:/data
+    restart: unless-stopped
 
-      
+  data_loader:
+    build: ./data_loader
+    env_file: .env
+    depends_on: [redis]
+    restart: unless-stopped
+
+  data_retainer:
+    build: ./data_retainer
+    env_file: .env
+    depends_on: [redis]
+    restart: unless-stopped
+
+  model_service:
+    build: ./model_service
+    env_file: .env
+    depends_on: [redis, data_loader]
+    restart: unless-stopped
+
+  decision_service:
+    build: ./decision_service
+    env_file: .env
+    depends_on: [redis, model_service]
+    restart: unless-stopped
+
+  trade_executor:
+    build: ./trade_executor
+    env_file: .env
+    depends_on: [redis, decision_service]
+    restart: unless-stopped
+
+  trade_manager:
+    build: ./trade_manager
+    env_file: .env
+    depends_on: [redis, trade_executor]
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # only if you want the REST API accessible
+
+volumes:
+  redis_data:

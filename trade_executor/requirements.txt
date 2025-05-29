@@ -1,3 +1,4 @@
-numpy>=1.26
 redis>=5.0
-MetaTrader5==5.0.39
+python-dotenv>=1.0
+numpy>=1.26
+MetaTrader5>=5.0; platform_system=="Windows"

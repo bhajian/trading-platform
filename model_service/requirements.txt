@@ -1,7 +1,7 @@
-fastapi>=0.111
-uvicorn[standard]>=0.29
-torch>=2.2          # swap for tensorflow if your model is TF
-numpy>=1.26
+torch>=2.2
 pandas>=2.2
+numpy>=1.26
 redis>=5.0
-pydantic>=2.7
+joblib>=1.4
+scikit-learn>=1.5
+python-dotenv>=1.0
