@@ -2,14 +2,15 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--save", "300", "1", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
     volumes:
-      - redis_data:/data
-    restart: unless-stopped
+      - ./redis_data:/data
 
   data_loader:
     build:
       context: .
-      dockerfile: data_loader/Dockerfile
+      dockerfile: ./data_loader/Dockerfile
     env_file: .env
     depends_on: [redis]
     restart: unless-stopped

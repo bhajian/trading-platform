@@ -1,22 +1,41 @@
+#!/usr/bin/env python3
 """
-augmenter.py – v9 feature schema (strict)
------------------------------------------
-Outputs *exactly* the 50 columns used during transformer_v9 training:
-49 numeric features + 1 pair_id.  No μ/σ pads here – those are added
-on-the-fly by model_service before the sequence enters the transformer.
+augmenter.py – v9 feature schema (strict, hardened)
+---------------------------------------------------
+• Produces *exactly* the 50-column set used for transformer_v9:
+  49 numeric features + 1 `pair_id` (last).
+• All timestamp strings/numbers → tz-naïve UTC via `_to_naive_utc`,
+  preventing any “tz-naive / tz-aware” errors.
 """
 
 from __future__ import annotations
-import warnings, os
+import os, warnings
 from pathlib import Path
-from typing import Final, List
-import numpy as np, pandas as pd
-from scipy.signal import argrelextrema
+from typing import Any, Final, List
+
+import numpy as np
+import pandas as pd
+from scipy.signal  import argrelextrema
 from ta.momentum   import RSIIndicator
 from ta.trend      import MACD, ADXIndicator
 from ta.volatility import AverageTrueRange, BollingerBands
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+# ───── tolerant ts helper (same logic as loader) ──────────────────────
+def _to_naive_utc(val: Any) -> pd.Timestamp:
+    if isinstance(val, pd.Timestamp):
+        ts = val
+    elif isinstance(val, (int, float)) or (isinstance(val, str) and val.isdigit()):
+        ts = pd.to_datetime(int(val), unit="ms", errors="coerce")
+    else:
+        ts = pd.to_datetime(val, utc=False, errors="coerce")
+
+    if ts is pd.NaT:
+        return ts
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    return ts.tz_convert(None)
 
 # ───── constants ──────────────────────────────────────────────────────
 EXTREMA_ORDER: Final[int] = 20
@@ -48,15 +67,13 @@ _HAS_MACRO = MACRO_CSV.exists()
 if _HAS_MACRO:
     _mac = (pd.read_csv(MACRO_CSV, parse_dates=["date"])
             .dropna(subset=["event"]))
-    if _mac["date"].dt.tz is not None:
-        _mac["date"] = _mac["date"].dt.tz_convert(None)
+    _mac["date"] = _mac["date"].apply(_to_naive_utc)
     _mac["date_hour"] = _mac["date"].dt.floor("h")
     _mac["impact_wt"] = _mac["impact"].map({"Low":1,"Medium":2,"High":3}).fillna(0)
     _mac["forecast"]  = pd.to_numeric(_mac["estimate"], errors="coerce")
     _mac["actual"]    = pd.to_numeric(_mac["actual"]  , errors="coerce")
     _mac["event_score"] = (_mac["actual"] - _mac["forecast"]).fillna(0) * _mac["impact_wt"]
     _macro_currencies = set(_mac["currency"].unique())
-
 
 # ───── helpers ────────────────────────────────────────────────────────
 def pip_size(pair: str) -> float:
@@ -78,11 +95,10 @@ def _near_sr(price: np.ndarray, sr: pd.Series) -> np.ndarray:
             flags[i] = np.any(np.abs(price[i]-np.asarray(seen)) < SR_TOL*price[i])
     return flags.astype(int)
 
-
 # ───── main augmentation ──────────────────────────────────────────────
 def compute_features(df: pd.DataFrame, pair: str) -> pd.DataFrame:
     out = df.copy()
-    out["timestamp"] = pd.to_datetime(out["timestamp"]).dt.tz_convert(None)
+    out["timestamp"] = out["timestamp"].apply(_to_naive_utc)
     out["date_hour"] = out["timestamp"].dt.floor("h")
 
     # macro score (numeric)
@@ -95,22 +111,24 @@ def compute_features(df: pd.DataFrame, pair: str) -> pd.DataFrame:
                  .groupby("date_hour", as_index=False)
                  .agg(ms=("event_score","sum")))
             out = out.merge(m, on="date_hour", how="left")
-        out["macro_score"] = out["ms"].fillna(0.0)
+        out["macro_score"] = out["ms"].fillna(0.0) if "ms" in out else 0.0
     else:
         out["macro_score"] = 0.0
 
     # support / resistance & distances
-    out["support_sr"]    = np.nan
+    out["support_sr"] = np.nan
     out["resistance_sr"] = np.nan
     mins = argrelextrema(out["low"].values,  np.less_equal , order=EXTREMA_ORDER)[0]
     maxs = argrelextrema(out["high"].values, np.greater_equal, order=EXTREMA_ORDER)[0]
     out.loc[mins,"support_sr"]    = out.loc[mins,"low"]
     out.loc[maxs,"resistance_sr"] = out.loc[maxs,"high"]
 
+    out["near_support_sr"]    = _near_sr(out["low"].values,  out["support_sr"])
+    out["near_resistance_sr"] = _near_sr(out["high"].values, out["resistance_sr"])
     out["dist_to_support_sr"]    = (out["close"] - out["support_sr"])    / out["support_sr"]
     out["dist_to_resistance_sr"] = (out["resistance_sr"] - out["close"]) / out["resistance_sr"]
 
-    # indicators (as in training)
+    # indicators (identical to training)
     rsi  = RSIIndicator(out["close"], fillna=True)
     macd = MACD(out["close"], fillna=True)
     atr  = AverageTrueRange(out["high"], out["low"], out["close"], fillna=True)
@@ -128,7 +146,7 @@ def compute_features(df: pd.DataFrame, pair: str) -> pd.DataFrame:
         (out["macd"].shift(1) <= out["macd_signal"].shift(1)), 1,
         np.where(
         (out["macd"] < out["macd_signal"]) &
-        (out["macd"].shift(1) >= out["macd_signal"].shift(1)), -1, 0))
+        (out["macd"].shift(1) >= out["macd_signal"].shift(1)),-1, 0))
 
     out["ma20"]       = out["close"].rolling(20).mean()
     out["ma50"]       = out["close"].rolling(50).mean()
@@ -199,12 +217,16 @@ def compute_features(df: pd.DataFrame, pair: str) -> pd.DataFrame:
         (out["trend_angle_24"] >  0.01) & (out["ma_diff_norm"] >  0.0005)
     ).astype(int)
 
-    # pair_id (last numeric)
+    # pair_id
     out["pair_id"] = _pair_id(pair)
 
-    # cleanup & column order
-    out.replace([np.inf,-np.inf], np.nan, inplace=True)
-    out.fillna(method="ffill", inplace=True)
+    # ─── final cleanup & order ───────────────────────────────────────────
+    out.replace([np.inf, -np.inf], np.nan, inplace=True)
+
+    # forward-fill any gaps that can be filled from previous rows
+    out.ffill(inplace=True)           # modern, warning-free API
+
+    # whatever is still NaN after ffill (start of file, divisions by 0, etc.)
     out.fillna(0.0, inplace=True)
 
     return out[FEATS]
