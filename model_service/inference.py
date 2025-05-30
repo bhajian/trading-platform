@@ -82,7 +82,7 @@ def score(seq: np.ndarray) -> tuple[str, float]:
     return CLASS_NAMES[cls], conf
 
 # ─── main loop ───────────────────────────────────────────────────────
-heartbeat("data_retainer")
+heartbeat("model_service")
 while True:
     tic = time.time()
     for sym in SYMBOLS:
@@ -93,5 +93,5 @@ while True:
                  mapping={"decision": dec, "confidence": conf})
         logging.debug("%s → %s (%.2f)", sym, dec, conf)
 
-    heartbeat("data_retainer")
+    heartbeat("model_service")
     time.sleep(max(1, INTERVAL - (time.time() - tic)))

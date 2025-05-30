@@ -115,13 +115,13 @@ def main() -> None:
         return
 
     log.info("trade_executor running, polling every %d s", POLL_SEC)
-    heartbeat("data_retainer")
+    heartbeat("trade_executor")
     while True:
         try:
             sync_round(mt5)
         except Exception as exc:  # noqa: BLE001
             log.error("sync error – %s", exc)
-        heartbeat("data_retainer")
+        heartbeat("trade_executor")
         time.sleep(POLL_SEC)
 
 

@@ -221,7 +221,7 @@ def main() -> None:
     logging.info("decision_service up – watching %d symbols", len(SYMBOLS))
     last_ts: Dict[str, str] = {}  # per-pair dedupe
 
-    heartbeat("data_retainer")
+    heartbeat("decision_service")
     while True:
         t0 = time.time()
         for pair in SYMBOLS:
@@ -240,7 +240,7 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 logging.error("%s – %s", pair, exc)
         
-        heartbeat("data_retainer")
+        heartbeat("decision_service")
         time.sleep(max(1.0, 60 - (time.time() - t0)))  # aim ~1 Hz loop
 
 
