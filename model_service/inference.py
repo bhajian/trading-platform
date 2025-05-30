@@ -5,6 +5,7 @@ inference.py – live scorer for transformer_v9 (strict feature list)
 from __future__ import annotations
 import json, os, time, logging
 import numpy as np, pandas as pd, redis, torch, torch.nn as nn
+from shared.redis_client import heartbeat
 
 # ─── ENV ──────────────────────────────────────────────────────────────
 REDIS_URL   = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -81,6 +82,7 @@ def score(seq: np.ndarray) -> tuple[str, float]:
     return CLASS_NAMES[cls], conf
 
 # ─── main loop ───────────────────────────────────────────────────────
+heartbeat("data_retainer")
 while True:
     tic = time.time()
     for sym in SYMBOLS:
@@ -90,4 +92,6 @@ while True:
         rds.hset(f"live:model_decision:{sym}",
                  mapping={"decision": dec, "confidence": conf})
         logging.debug("%s → %s (%.2f)", sym, dec, conf)
+
+    heartbeat("data_retainer")
     time.sleep(max(1, INTERVAL - (time.time() - tic)))

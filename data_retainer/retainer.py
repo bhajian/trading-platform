@@ -32,7 +32,7 @@ import json, logging, os, time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
-
+from shared.redis_client import heartbeat
 import pandas as pd
 import redis
 
@@ -162,7 +162,9 @@ def main() -> None:
     logging.info("retainer up – symbols: %s", len(SYMBOLS))
     last_book_dump = time.time()
 
+    heartbeat("data_retainer")
     while True:
+        
         cycle_start = time.time()
         try:
             # 1️⃣  trim market-data lists
@@ -183,6 +185,7 @@ def main() -> None:
 
         # sleep the remainder
         elapsed = time.time() - cycle_start
+        heartbeat("data_retainer")
         time.sleep(max(1.0, CHECK_EVERY - elapsed))
 
 

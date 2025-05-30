@@ -29,7 +29,7 @@ from typing import Dict, List
 
 import numpy as np
 import redis
-
+from shared.redis_client import heartbeat
 import rules as R  # <- all strategy constants/helpers
 
 # ───── CONFIG ──────────────────────────────────────────────────────────
@@ -221,6 +221,7 @@ def main() -> None:
     logging.info("decision_service up – watching %d symbols", len(SYMBOLS))
     last_ts: Dict[str, str] = {}  # per-pair dedupe
 
+    heartbeat("data_retainer")
     while True:
         t0 = time.time()
         for pair in SYMBOLS:
@@ -238,7 +239,8 @@ def main() -> None:
                 last_ts[pair] = ts_iso
             except Exception as exc:  # noqa: BLE001
                 logging.error("%s – %s", pair, exc)
-
+        
+        heartbeat("data_retainer")
         time.sleep(max(1.0, 60 - (time.time() - t0)))  # aim ~1 Hz loop
 
 

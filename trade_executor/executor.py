@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Dict
 
 import redis
-
+from shared.redis_client import heartbeat
 from mt5_client import MT5Client, TradeSpec
 
 # ───── CONFIG ────────────────────────────────────────────────────────
@@ -115,11 +115,13 @@ def main() -> None:
         return
 
     log.info("trade_executor running, polling every %d s", POLL_SEC)
+    heartbeat("data_retainer")
     while True:
         try:
             sync_round(mt5)
         except Exception as exc:  # noqa: BLE001
             log.error("sync error – %s", exc)
+        heartbeat("data_retainer")
         time.sleep(POLL_SEC)
 
 
