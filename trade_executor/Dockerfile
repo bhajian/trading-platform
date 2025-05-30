@@ -1,12 +1,10 @@
-# trade_executor/Dockerfile
 FROM python:3.11-slim
-
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY shared/ /app/shared
+COPY trade_executor/ /app/trade_executor/
 
-COPY . .
+RUN pip install --no-cache-dir -r trade_executor/requirements.txt
+ENV PYTHONPATH=/app
 
-ENV PYTHONUNBUFFERED=1
-CMD ["python", "-m", "trade_executor.executor"]
+CMD ["python", "trade_executor/executor.py"]

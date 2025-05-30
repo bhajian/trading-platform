@@ -1,12 +1,10 @@
-# trade_manager/Dockerfile
 FROM python:3.11-slim
-
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY shared/ /app/shared
+COPY trade_manager/ /app/trade_manager/
 
-COPY . .
+RUN pip install --no-cache-dir -r trade_manager/requirements.txt
+ENV PYTHONPATH=/app
 
-ENV PYTHONUNBUFFERED=1
-CMD ["python", "-m", "trade_manager.manager"]
+CMD ["python", "trade_manager/manager.py"]

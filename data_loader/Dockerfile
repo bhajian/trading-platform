@@ -1,12 +1,10 @@
-# data_loader/Dockerfile
 FROM python:3.11-slim
-
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY shared/ /app/shared
+COPY data_loader/ /app/data_loader/
 
-COPY . .
+RUN pip install --no-cache-dir -r data_loader/requirements.txt
+ENV PYTHONPATH=/app
 
-# Entrypoint
-CMD ["python", "-m", "data_loader.loader"]
+CMD ["python", "data_loader/loader.py"]

@@ -30,7 +30,7 @@ from typing import Dict, List
 import numpy as np
 import redis
 
-from . import rules as R  # <- all strategy constants/helpers
+import rules as R  # <- all strategy constants/helpers
 
 # ───── CONFIG ──────────────────────────────────────────────────────────
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")

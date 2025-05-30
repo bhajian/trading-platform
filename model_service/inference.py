@@ -1,182 +1,93 @@
 #!/usr/bin/env python3
 """
-inference.py  – Transformer-v9 live scorer
------------------------------------------
-Environment
------------
-REDIS_URL      redis://host:port/db      (default: redis://redis:6379/0)
-SYMBOLS        comma-sep pairs           (must match loader)
-AUG_LEN        rows to pull (seq_len)    (default: 336)
-MODEL_PATH     path in container         (default: ./models/transformer_v9.pth)
-SCALER_PATH    optional StandardScaler   (default: "")
-INTERVAL_SEC   polling period            (default: 60)
-LOG_LEVEL      INFO | DEBUG              (default: INFO)
+inference.py – live scorer for transformer_v9 (strict feature list)
 """
-
 from __future__ import annotations
+import json, os, time, logging
+import numpy as np, pandas as pd, redis, torch, torch.nn as nn
 
-import io, json, logging, os, time
-from typing import List
-
-import joblib
-import numpy as np
-import pandas as pd
-import redis
-import torch
-import torch.nn as nn
-
-# ───── CONFIG ──────────────────────────────────────────────────────────
+# ─── ENV ──────────────────────────────────────────────────────────────
 REDIS_URL   = os.getenv("REDIS_URL", "redis://redis:6379/0")
-AUG_LEN     = int(os.getenv("AUG_LEN", 336))
-MODEL_PATH  = os.getenv("MODEL_PATH", "./models/transformer_v9.pth")
-SCALER_PATH = os.getenv("SCALER_PATH", "")
+MODEL_PATH  = os.getenv("MODEL_PATH",
+                        "/app/model_service/models/transformer_v9.pth")
+SYMBOLS     = os.getenv("SYMBOLS",
+    "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,EURJPY,GBPJPY").split(",")
+SEQ_LEN     = 336
 INTERVAL    = int(os.getenv("INTERVAL_SEC", 60))
-
-DEFAULT_SYMBOLS = (
-    "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCHF,USDCAD,EURJPY,GBPJPY,"
-    "AUDJPY,NZDUSD,NZDJPY,EURGBP,EURCHF,CHFJPY,CADJPY,"
-    "AUDCAD,GBPAUD,EURAUD"
-)
-SYMBOLS: List[str] = os.getenv("SYMBOLS", DEFAULT_SYMBOLS).split(",")
-
-AUG_KEY = "live:data:augmented:{}"
+AUG_KEY     = "live:data:augmented:{}"
 CLASS_NAMES = ["up", "down", "no_trade"]
+MAX_PAIRS   = 50
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s [%(levelname)s] model_service: %(message)s",
-)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
+                    format="%(asctime)s [%(levelname)s] model_service: %(message)s")
 
 rds = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+DEV = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ───── MODEL DEFINITION (must match training) ─────────────────────────
-HIDDEN_DIM = 256
-N_LAYERS   = 6
-N_HEADS    = 8
-DROPOUT    = 0.2
-MAX_PAIRS  = 50            # keep in sync with training
+# strict -- 49 numerics + pair_id (last)
+FEATS = [
+ "open","high","low","close","volume",
+ "rsi","rsi_high","rsi_low",
+ "macd","macd_signal","macd_cross",
+ "ma20","ma50","ma_diff","ma_diff_norm",
+ "ma_cross_signal","ma20_cross_price",
+ "volatility","atr","support_sr","resistance_sr",
+ "dist_to_support_sr","dist_to_resistance_sr",
+ "bottom_wick_len","top_wick_len","bottom_wick_ratio","top_wick_ratio",
+ "wick_type","is_bearish_engulfing","volume_change","volume_vs_avg",
+ "volume_on_downbar","trend_angle_4","trend_angle_24","trend_angle_72",
+ "is_down_trend_confirmed","is_up_trend_confirmed","macro_score",
+ "bb_upper","bb_lower","bb_width","bb_percent_b","adx","adx_low","atr_norm",
+ "range_24h","range_24h_pips","ma20_slope","ma20_flat","pair_id"
+]
+NUMERIC = [c for c in FEATS if c != "pair_id"]           # 49
 
-
+# ─── model identical to training ─────────────────────────────────────
 class TimeSeriesTransformer(nn.Module):
-    def __init__(self, in_dim: int):
+    def __init__(self, in_dim: int = 49):
         super().__init__()
         self.pair_emb = nn.Embedding(MAX_PAIRS, 16)
-        self.proj     = nn.Linear(in_dim + 16, HIDDEN_DIM)
-
-        enc = nn.TransformerEncoderLayer(
-            d_model=HIDDEN_DIM,
-            nhead=N_HEADS,
-            dim_feedforward=HIDDEN_DIM * 4,
-            dropout=DROPOUT,
-            batch_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(enc, N_LAYERS)
-        self.head    = nn.Sequential(
-            nn.LayerNorm(HIDDEN_DIM),
-            nn.Linear(HIDDEN_DIM, len(CLASS_NAMES))
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:      # (B,S,F)
-        pid   = x[:, :, -3].long().clamp(max=MAX_PAIRS - 1)
+        self.proj     = nn.Linear(in_dim + 16, 256)
+        enc = nn.TransformerEncoderLayer(256, 8, 1024, 0.2, batch_first=True)
+        self.encoder  = nn.TransformerEncoder(enc, 6)
+        self.head     = nn.Sequential(nn.LayerNorm(256), nn.Linear(256, 3))
+    def forward(self, x):
+        pid   = x[:, :, -3].long().clamp(max=MAX_PAIRS-1)
         feats = x[:, :, :-3]
-        x     = torch.cat([feats, self.pair_emb(pid)], dim=2)
-        h     = self.encoder(self.proj(x))
-        return self.head(h[:, -1])                          # CLS-like
+        h = self.encoder(self.proj(torch.cat([feats, self.pair_emb(pid)], 2)))
+        return self.head(h[:, -1])
 
+model = TimeSeriesTransformer().to(DEV)
+model.load_state_dict(torch.load(MODEL_PATH, map_location=DEV))
+model.eval()
+logging.info("weights loaded from %s", MODEL_PATH)
 
-# ───── LOAD ARTIFACTS ─────────────────────────────────────────────────
-def load_model(in_dim: int) -> nn.Module:
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    mdl = TimeSeriesTransformer(in_dim).to(device)
-    logging.info("Loading weights from %s", MODEL_PATH)
-    state = torch.load(MODEL_PATH, map_location=device)
-    mdl.load_state_dict(state)
-    mdl.eval()
-    return mdl, device
+# ─── helpers ─────────────────────────────────────────────────────────
+def latest_seq(sym: str) -> np.ndarray | None:
+    rows = rds.lrange(AUG_KEY.format(sym), -SEQ_LEN, -1)
+    if len(rows) < SEQ_LEN:
+        return None
+    df = pd.DataFrame(json.loads(x) for x in rows)[FEATS]
+    arr = df.to_numpy(np.float32)
+    mu, sigma = arr[:, :-1].mean(), arr[:, :-1].std()      # exclude pair_id
+    return np.concatenate([arr,
+                           np.tile([mu, sigma], (SEQ_LEN, 1))], 1)  # +μσ
 
+def score(seq: np.ndarray) -> tuple[str, float]:
+    X = torch.from_numpy(seq).unsqueeze(0).to(DEV)          # (1,336,52)
+    with torch.no_grad():
+        p = torch.softmax(model(X), 1)[0].cpu().numpy()
+    cls, conf = int(p.argmax()), float(p.max())
+    return CLASS_NAMES[cls], conf
 
-scaler = None
-if SCALER_PATH:
-    logging.info("Loading scaler %s", SCALER_PATH)
-    scaler = joblib.load(SCALER_PATH)
-
-
-# ───── INFERENCE LOOP ────────────────────────────────────────────────
-def numeric_block(df: pd.DataFrame) -> np.ndarray:
-    """
-    Keep numeric cols only, guarantee last 3 meta columns:
-        [ … numeric… , pair_id, meta_pad1, meta_pad2 ]
-    """
-    num_df = df.select_dtypes(include=[np.number]).copy()
-
-    # ensure pair_id exists & is last-3
-    if "pair_id" not in num_df.columns:
-        raise ValueError("pair_id column missing in augmented data")
-
-    # reorder so pair_id is last; add two dummy zeros
-    others = [c for c in num_df.columns if c != "pair_id"]
-    num_df = num_df[others + ["pair_id"]]
-    num_df["meta_pad1"] = 0.0
-    num_df["meta_pad2"] = 0.0
-    return num_df.to_numpy(dtype=np.float32)
-
-
-def process_symbol(sym: str, mdl, device) -> None:
-    aug_key = AUG_KEY.format(sym)
-    # Get last AUG_LEN rows (oldest→newest)
-    raw_rows = rds.lrange(aug_key, -AUG_LEN, -1)
-    if len(raw_rows) < AUG_LEN:
-        return  # not enough history yet
-
-    last_row = json.loads(raw_rows[-1])
-    if "model_decision" in last_row:
-        return  # already scored
-
-    df = pd.DataFrame(json.loads(x) for x in raw_rows)
-    block = numeric_block(df)                    # (S, F)
-    if scaler is not None:
-        shape = block.shape
-        block = scaler.transform(block.reshape(-1, block.shape[-1]))\
-                        .reshape(shape)
-
-    x = torch.from_numpy(block).unsqueeze(0).to(device)  # (1,S,F+3)
-    with torch.no_grad(), torch.cuda.amp.autocast():
-        logits = mdl(x)
-    probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
-    pred  = int(np.argmax(probs))
-    decision = CLASS_NAMES[pred]
-
-    # Write back to Redis
-    last_row["model_decision"] = decision
-    last_row["model_probs"]    = {
-        cls: float(p) for cls, p in zip(CLASS_NAMES, probs)
-    }
-    rds.lset(aug_key, -1, json.dumps(last_row))
-    logging.info("%s → %s (p=%.2f)", sym, decision, probs[pred])
-
-
-def main() -> None:
-    # quick probe to get feature-dim
-    sample_key = AUG_KEY.format(SYMBOLS[0])
-    rows = rds.lrange(sample_key, -AUG_LEN, -1)
-    if not rows:
-        logging.error("No augmented data yet – model service sleeping …")
-        time.sleep(30)
-
-    df_sample = pd.DataFrame(json.loads(r) for r in rows) if rows else pd.DataFrame()
-    in_dim = numeric_block(df_sample).shape[1] - 3 if not df_sample.empty else 100
-    model, device = load_model(in_dim)
-
-    logging.info("model_service up – polling every %d s", INTERVAL)
-    while True:
-        loop_start = time.time()
-        for sym in SYMBOLS:
-            try:
-                process_symbol(sym, model, device)
-            except Exception as exc:                      # noqa: BLE001
-                logging.error("process %s failed – %s", sym, exc)
-        time.sleep(max(1.0, INTERVAL - (time.time() - loop_start)))
-
-
-if __name__ == "__main__":
-    main()
+# ─── main loop ───────────────────────────────────────────────────────
+while True:
+    tic = time.time()
+    for sym in SYMBOLS:
+        seq = latest_seq(sym)
+        if seq is None: continue
+        dec, conf = score(seq)
+        rds.hset(f"live:model_decision:{sym}",
+                 mapping={"decision": dec, "confidence": conf})
+        logging.debug("%s → %s (%.2f)", sym, dec, conf)
+    time.sleep(max(1, INTERVAL - (time.time() - tic)))

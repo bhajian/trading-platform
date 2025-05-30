@@ -19,7 +19,7 @@ from typing import Dict
 
 import redis
 
-from .mt5_client import MT5Client, TradeSpec
+from mt5_client import MT5Client, TradeSpec
 
 # ───── CONFIG ────────────────────────────────────────────────────────
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
